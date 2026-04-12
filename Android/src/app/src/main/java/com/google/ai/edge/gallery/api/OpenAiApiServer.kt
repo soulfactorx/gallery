@@ -6,7 +6,6 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
-import com.google.ai.edge.litertlm.SamplerConfig
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -127,7 +126,7 @@ object EngineManager {
             val config = EngineConfig(
                 modelPath = modelPath,
                 backend = backend,
-                cacheDir = cacheDir,
+                cacheDir = null,
             )
 
             val newEngine = Engine(config)
@@ -261,7 +260,7 @@ class OpenAiApiServer(
             val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
             val convConfig = ConversationConfig(
                 systemInstruction = systemMsg?.let { Contents.of(it) },
-                samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 1.0),
+                samplerConfig = null,
             )
             engine.createConversation(convConfig).use { conversation ->
                 val userMessages = req.messages.filter { it.role != "system" }
