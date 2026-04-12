@@ -175,29 +175,6 @@ class OpenAiApiServer(
             return
         }
 
-        // 모델 경로 결정: X-Model-Path 헤더 > defaultModelPath
-        val modelPath = call.request.headers["X-Model-Path"]
-            ?: defaultModelPath
-            ?: run {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    ErrorResponse(
-                        ErrorDetail(
-                            "No model loaded. Set X-Model-Path header or configure defaultModelPath."
-                        )
-                    )
-                )
-                return
-            }
-
-        if (!File(modelPath).exists()) {
-            call.respond(
-                HttpStatusCode.BadRequest,
-                ErrorResponse(ErrorDetail("Model file not found: $modelPath"))
-            )
-            return
-        }
-
         val engine = try {
             EngineManager.getEngine() ?: run {
                call.respond(
