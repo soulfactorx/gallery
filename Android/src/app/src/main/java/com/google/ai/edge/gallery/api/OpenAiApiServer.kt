@@ -95,60 +95,19 @@ data class ErrorDetail(
 // ── 엔진 관리 ────────────────────────────────────────────────────
 
 object EngineManager {
-    private var engine: Engine? = null
-    private var currentModelPath: String? = null
-    private val lock = Any()
-
-    fun getOrCreateEngine(
-        modelPath: String,
-        nativeLibDir: String,
-        useNpu: Boolean = true,
-        cacheDir: String? = null,
-    ): Engine {
-        synchronized(lock) {
-            if (engine != null && currentModelPath == modelPath) {
-                return engine!!
-            }
-            engine?.close()
-            engine = null
-
-            val backend = if (useNpu) {
-                try {
-                    Backend.NPU(nativeLibraryDir = nativeLibDir)
-                } catch (e: Exception) {
-                    Log.w(TAG, "NPU unavailable, falling back to GPU: ${e.message}")
-                    Backend.GPU()
-                }
-            } else {
-                Backend.GPU()
-            }
-
-            val config = EngineConfig(
-                modelPath = modelPath,
-                backend = backend,
-                cacheDir = null,
-            )
-
-            val newEngine = Engine(config)
-            newEngine.initialize()
-            engine = newEngine
-            currentModelPath = modelPath
-            Log.i(TAG, "Engine initialized: $modelPath backend=$backend")
-            return newEngine
-        }
-    }
-
+    var sharedEngine: Engine? = null
+    var sharedModelId: String = "no-model-loaded"
+    
+    // 기존 getOrCreateEngine 대신 sharedEngine만 사용
+    fun getEngine(): Engine? = sharedEngine
+    
+    fun currentModelId(): String = sharedModelId
+    
     fun close() {
-        synchronized(lock) {
-            engine?.close()
-            engine = null
-            currentModelPath = null
-        }
+        // 공유 엔진이므로 여기서 닫지 않음 (앱이 관리)
+        sharedEngine = null
+        sharedModelId = "no-model-loaded"
     }
-
-    fun currentModelId(): String = currentModelPath?.let {
-        File(it).nameWithoutExtension
-    } ?: "no-model-loaded"
 }
 
 // ── Ktor 서버 ────────────────────────────────────────────────────
@@ -240,11 +199,13 @@ class OpenAiApiServer(
         }
 
         val engine = try {
-            EngineManager.getOrCreateEngine(
-                modelPath = modelPath,
-                nativeLibDir = nativeLibDir,
-                cacheDir = cacheDir,
-            )
+            EngineManager.getEngine() ?: run {
+               call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    ErrorResponse(ErrorDetail("No model loaded. Please load a model in the app first."))
+                )
+                return
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Engine init failed", e)
             call.respond(
