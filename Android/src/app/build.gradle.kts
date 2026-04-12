@@ -67,7 +67,7 @@ android {
     compose = true
     buildConfig = true
   }
-    packaging {
+    packagingOptions {
         resources {
             excludes += setOf(
                 "META-INF/INDEX.LIST",
