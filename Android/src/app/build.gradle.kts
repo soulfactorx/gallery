@@ -31,6 +31,15 @@ plugins {
 android {
   namespace = "com.google.ai.edge.gallery"
   compileSdk = 35
+  packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/INDEX.LIST",
+                "META-INF/io.netty.versions.properties",
+                "META-INF/DEPENDENCIES",
+            )
+        }
+  }
 
   defaultConfig {
     applicationId = "com.google.aiedge.gallery"
@@ -66,15 +75,6 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
-  }
-  packaging {
-        resources {
-            excludes += setOf(
-                "META-INF/INDEX.LIST",
-                "META-INF/io.netty.versions.properties",
-                "META-INF/DEPENDENCIES",
-            )
-        }
   }
 }
 
