@@ -259,7 +259,7 @@ class OpenAiApiServer(
             val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
             val convConfig = ConversationConfig(
                 systemInstruction = systemMsg?.let { Contents.of(it) },
-                samplerConfig = SamplerConfig(topK = 40, topP = 0.95f, temperature = 1.0f),
+                samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 1.0),
             )
             engine.createConversation(convConfig).use { conversation ->
                 val userMessages = req.messages.filter { it.role != "system" }
