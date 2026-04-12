@@ -59,6 +59,10 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.google.ai.edge.gallery.api.ApiServerService
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
