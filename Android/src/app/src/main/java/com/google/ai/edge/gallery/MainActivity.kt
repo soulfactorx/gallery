@@ -58,6 +58,7 @@ import com.google.firebase.analytics.FirebaseAnalytics
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.google.ai.edge.gallery.api.ApiServerService
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
