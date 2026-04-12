@@ -144,6 +144,9 @@ object LlmChatModelHelper : LlmModelHelper {
             tools = tools,
           )
         )
+        
+      EngineManager.sharedConversation = conversation
+
       ExperimentalFlags.enableConversationConstrainedDecoding = false
       model.instance = LlmModelInstance(engine = engine, conversation = conversation)
     } catch (e: Exception) {
