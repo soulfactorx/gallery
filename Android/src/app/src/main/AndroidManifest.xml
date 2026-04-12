@@ -33,6 +33,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Additional permission required for push notification handling -->
     <!-- Required for resurfacing notifications after boot -->
@@ -117,6 +119,11 @@
             android:exported="false"
             tools:node="merge">
         </service>
+        <service
+            android:name=".api.ApiServerService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- For Firebase Analytics. -->
         <receiver
