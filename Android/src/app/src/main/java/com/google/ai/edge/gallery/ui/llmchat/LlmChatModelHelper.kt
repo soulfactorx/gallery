@@ -47,6 +47,7 @@ import com.google.ai.edge.litertlm.ToolProvider
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import com.google.ai.edge.gallery.api.EngineManager
 
 private const val TAG = "AGLlmChatModelHelper"
 
