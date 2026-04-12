@@ -120,6 +120,12 @@ dependencies {
   debugImplementation(libs.androidx.ui.test.manifest)
   ksp(libs.moshi.kotlin.codegen)
   implementation(libs.mlkit.genai.prompt)
+  val ktor_version = "2.3.12"
+  implementation("io.ktor:ktor-server-core:$ktor_version")
+  implementation("io.ktor:ktor-server-netty:$ktor_version")
+  implementation("io.ktor:ktor-server-content-negotiation:$ktor_version")
+  implementation("io.ktor:ktor-serialization-kotlinx-json:$ktor_version")
+  implementation("io.ktor:ktor-server-cors:$ktor_version")
 }
 
 protobuf {
