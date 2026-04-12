@@ -201,13 +201,12 @@ class OpenAiApiServer(
             return
         }
 
-val responseText = StringBuilder()
-try {
-    val lastUserMsg = req.messages.lastOrNull { it.role == "user" }?.content ?: ""
-    conversation.sendMessageAsync(lastUserMsg).collect { token ->
-        responseText.append(token)
-    }
-}
+        val responseText = StringBuilder()
+        try {
+            val lastUserMsg = req.messages.lastOrNull { it.role == "user" }?.content ?: ""
+            conversation.sendMessageAsync(lastUserMsg).collect { token ->
+                responseText.append(token)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Inference failed", e)
             call.respond(
