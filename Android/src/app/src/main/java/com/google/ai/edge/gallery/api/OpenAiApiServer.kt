@@ -164,7 +164,7 @@ class OpenAiApiServer(
     private var server: ApplicationEngine? = null
 
     fun start() {
-        server = embeddedServer(CIO, port = port) {
+        server = embeddedServer(factory = CIO, port = port) {
             install(ContentNegotiation) {
                 json(Json {
                     prettyPrint = false
