@@ -96,16 +96,16 @@ data class ErrorDetail(
 
 object EngineManager {
     var sharedEngine: Engine? = null
+    var sharedConversation: com.google.ai.edge.litertlm.Conversation? = null
     var sharedModelId: String = "no-model-loaded"
-    
-    // 기존 getOrCreateEngine 대신 sharedEngine만 사용
+
     fun getEngine(): Engine? = sharedEngine
-    
+    fun getConversation(): com.google.ai.edge.litertlm.Conversation? = sharedConversation
     fun currentModelId(): String = sharedModelId
-    
+
     fun close() {
-        // 공유 엔진이므로 여기서 닫지 않음 (앱이 관리)
         sharedEngine = null
+        sharedConversation = null
         sharedModelId = "no-model-loaded"
     }
 }
@@ -193,35 +193,21 @@ class OpenAiApiServer(
         }
 
         // Conversation 생성
-        val responseText = StringBuilder()
-        try {
-            val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
-            val convConfig = ConversationConfig(
-                systemInstruction = systemMsg?.let { Contents.of(it) },
-                samplerConfig = null,
+        val conversation = EngineManager.getConversation() ?: run {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ErrorResponse(ErrorDetail("No conversation available. Please open chat in the app first."))
             )
-            engine.createConversation(convConfig).use { conversation ->
-                val userMessages = req.messages.filter { it.role != "system" }
+            return
+        }
 
-                // 이전 assistant 메시지들을 히스토리로 추가 (있으면)
-                // LiteRT-LM은 대화 히스토리를 sendMessageAsync로 순서대로 보내면 됨
-                for (i in userMessages.indices) {
-                    val msg = userMessages[i]
-                    if (i < userMessages.size - 1) {
-                        // 히스토리 메시지 (마지막 제외) → 상태만 쌓기
-                        if (msg.role == "user") {
-                            conversation.sendMessageAsync(msg.content).collect { /* discard */ }
-                        }
-                    } else {
-                        // 마지막 user 메시지 → 실제 응답 생성
-                        if (msg.role == "user") {
-                            conversation.sendMessageAsync(msg.content).collect { token ->
-                                responseText.append(token)
-                            }
-                        }
-                    }
-                }
-            }
+val responseText = StringBuilder()
+try {
+    val lastUserMsg = req.messages.lastOrNull { it.role == "user" }?.content ?: ""
+    conversation.sendMessageAsync(lastUserMsg).collect { token ->
+        responseText.append(token)
+    }
+}
         } catch (e: Exception) {
             Log.e(TAG, "Inference failed", e)
             call.respond(
