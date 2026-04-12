@@ -69,19 +69,6 @@ android {
   }
 }
 
-// android 블록 밖, dependencies 블록 바로 위에
-val excludes = setOf(
-    "META-INF/INDEX.LIST",
-    "META-INF/io.netty.versions.properties",
-    "META-INF/DEPENDENCIES",
-)
-
-tasks.withType<com.android.build.gradle.internal.tasks.MergeJavaResourceTask>().configureEach {
-    doFirst {
-        // no-op, handled by packagingOptions below
-    }
-}
-
 dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
