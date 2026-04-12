@@ -69,6 +69,9 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 
+    // 앱 시작 시 API 서버 자동 실행
+    ApiServerService.start(this, port = 8080)
+
     // Debug: Dump all intent extras to see what FCM unloads
     intent.extras?.let { extras ->
       for (key in extras.keySet()) {
