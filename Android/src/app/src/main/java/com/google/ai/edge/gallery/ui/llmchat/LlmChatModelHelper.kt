@@ -121,6 +121,9 @@ object LlmChatModelHelper : LlmModelHelper {
       val engine = Engine(engineConfig)
       engine.initialize()
 
+      EngineManager.sharedEngine = engine
+      EngineManager.sharedModelId = model.name
+
       ExperimentalFlags.enableConversationConstrainedDecoding =
         enableConversationConstrainedDecoding
       val conversation =
