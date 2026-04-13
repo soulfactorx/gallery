@@ -168,54 +168,70 @@ class OpenAiApiServer(
         val req = try {
             call.receive<ChatCompletionRequest>()
         } catch (e: Exception) {
-            call.respond(
-                HttpStatusCode.BadRequest,
-                ErrorResponse(ErrorDetail("Invalid request body: ${e.message}"))
-            )
+            call.respond(HttpStatusCode.BadRequest,
+                ErrorResponse(ErrorDetail("Invalid request body: ${e.message}")))
             return
         }
-
-        val engine = try {
-            EngineManager.getEngine() ?: run {
-               call.respond(
-                    HttpStatusCode.ServiceUnavailable,
-                    ErrorResponse(ErrorDetail("No model loaded. Please load a model in the app first."))
-                )
-                return
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Engine init failed", e)
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                ErrorResponse(ErrorDetail("Engine initialization failed: ${e.message}"))
-            )
+    
+        val engine = EngineManager.getEngine() ?: run {
+            call.respond(HttpStatusCode.ServiceUnavailable,
+                ErrorResponse(ErrorDetail("No model loaded. Please load a model in the app first.")))
             return
         }
-
-        // Conversation 생성
-        val conversation = EngineManager.getConversation() ?: run {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                ErrorResponse(ErrorDetail("No conversation available. Please open chat in the app first."))
-            )
-            return
-        }
-
+    
         val responseText = StringBuilder()
         try {
-            val lastUserMsg = req.messages.lastOrNull { it.role == "user" }?.content ?: ""
-            conversation.sendMessageAsync(lastUserMsg).collect { token ->
-                responseText.append(token)
+            // 앱의 conversation 임시 보관 후 닫기
+            val appConversation = EngineManager.sharedConversation
+            appConversation?.cancelProcess()
+            try { appConversation?.close() } catch (e: Exception) { }
+    
+            // system 프롬프트 추출
+            val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
+    
+            // RisuAI 설정으로 새 conversation 생성
+            val apiConversation = engine.createConversation(
+                ConversationConfig(
+                    systemInstruction = systemMsg?.let { Contents.of(it) },
+                    samplerConfig = null,
+                )
+            )
+    
+            try {
+                // 대화 히스토리 재현 (마지막 메시지 제외)
+                val userMessages = req.messages.filter { it.role != "system" }
+                for (i in 0 until userMessages.size - 1) {
+                    val msg = userMessages[i]
+                    if (msg.role == "user") {
+                        apiConversation.sendMessageAsync(msg.content).collect { }
+                    }
+                }
+                // 마지막 user 메시지로 실제 응답 생성
+                val lastMsg = userMessages.lastOrNull { it.role == "user" }?.content ?: ""
+                apiConversation.sendMessageAsync(lastMsg).collect { token ->
+                    responseText.append(token)
+                }
+            } finally {
+                // API conversation 닫고 앱 conversation 복원
+                try { apiConversation.close() } catch (e: Exception) { }
+    
+                // 앱용 새 conversation 다시 생성해서 복원
+                try {
+                    val newAppConversation = engine.createConversation(
+                        ConversationConfig(samplerConfig = null)
+                    )
+                    EngineManager.sharedConversation = newAppConversation
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to restore app conversation", e)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Inference failed", e)
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                ErrorResponse(ErrorDetail("Inference failed: ${e.message}"))
-            )
+            call.respond(HttpStatusCode.InternalServerError,
+                ErrorResponse(ErrorDetail("Inference failed: ${e.message}")))
             return
         }
-
+    
         val response = ChatCompletionResponse(
             id = "chatcmpl-${System.currentTimeMillis()}",
             created = System.currentTimeMillis() / 1000,
@@ -238,4 +254,5 @@ class OpenAiApiServer(
         )
         call.respond(response)
     }
+
 }
