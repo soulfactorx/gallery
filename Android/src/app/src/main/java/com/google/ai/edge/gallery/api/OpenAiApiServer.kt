@@ -24,6 +24,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
+import kotlinx.coroutines.delay
 
 private const val TAG = "OpenAiApiServer"
 
@@ -183,12 +184,14 @@ class OpenAiApiServer(
         try {
             // 앱의 conversation 임시 보관 후 닫기
             val appConversation = EngineManager.sharedConversation
-            appConversation?.cancelProcess()
-            try { appConversation?.close() } catch (e: Exception) { }
-    
-            // system 프롬프트 추출
-            val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
-    
+            if (appConversation != null) {
+                try { appConversation.cancelProcess() } catch (e: Exception) { }
+                delay(300)
+                try { appConversation.close() } catch (e: Exception) { }
+                delay(300)
+                EngineManager.sharedConversation = null
+            }
+            
             // RisuAI 설정으로 새 conversation 생성
             val apiConversation = engine.createConversation(
                 ConversationConfig(
@@ -211,11 +214,10 @@ class OpenAiApiServer(
                 apiConversation.sendMessageAsync(lastMsg).collect { token ->
                     responseText.append(token)
                 }
-            } finally {
-                // API conversation 닫고 앱 conversation 복원
+
+            finally {
                 try { apiConversation.close() } catch (e: Exception) { }
-    
-                // 앱용 새 conversation 다시 생성해서 복원
+                delay(300)
                 try {
                     val newAppConversation = engine.createConversation(
                         ConversationConfig(samplerConfig = null)
