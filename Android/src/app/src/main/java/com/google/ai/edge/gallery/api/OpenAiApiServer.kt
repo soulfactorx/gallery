@@ -1,30 +1,24 @@
 package com.google.ai.edge.gallery.api
 
 import android.util.Log
-import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
-import io.ktor.server.engine.*
 import io.ktor.server.cio.CIO
-import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.ApplicationEngine
+import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import java.io.File
-import kotlinx.coroutines.delay
 
 private const val TAG = "OpenAiApiServer"
 
@@ -117,7 +111,6 @@ class OpenAiApiServer(
     private val port: Int = 8080,
     private val nativeLibDir: String,
     private val cacheDir: String,
-    /** 첫 번째 모델 경로 (null이면 요청 시 지정 필요) */
     private val defaultModelPath: String? = null,
 ) {
     private var server: ApplicationEngine? = null
@@ -169,20 +162,24 @@ class OpenAiApiServer(
         val req = try {
             call.receive<ChatCompletionRequest>()
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.BadRequest,
-                ErrorResponse(ErrorDetail("Invalid request body: ${e.message}")))
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(ErrorDetail("Invalid request body: ${e.message}"))
+            )
             return
         }
-    
+
         val engine = EngineManager.getEngine() ?: run {
-            call.respond(HttpStatusCode.ServiceUnavailable,
-                ErrorResponse(ErrorDetail("No model loaded. Please load a model in the app first.")))
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ErrorResponse(ErrorDetail("No model loaded. Please load a model in the app first."))
+            )
             return
         }
-    
+
         val responseText = StringBuilder()
         try {
-            // 앱의 conversation 임시 보관 후 닫기
+            // 앱의 conversation 닫기
             val appConversation = EngineManager.sharedConversation
             if (appConversation != null) {
                 try { appConversation.cancelProcess() } catch (e: Exception) { }
@@ -191,7 +188,10 @@ class OpenAiApiServer(
                 delay(300)
                 EngineManager.sharedConversation = null
             }
-            
+
+            // system 프롬프트 추출
+            val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
+
             // RisuAI 설정으로 새 conversation 생성
             val apiConversation = engine.createConversation(
                 ConversationConfig(
@@ -199,23 +199,23 @@ class OpenAiApiServer(
                     samplerConfig = null,
                 )
             )
-    
+
             try {
                 // 대화 히스토리 재현 (마지막 메시지 제외)
-                val userMessages = req.messages.filter { it.role != "system" }
-                for (i in 0 until userMessages.size - 1) {
-                    val msg = userMessages[i]
+                val nonSystemMessages = req.messages.filter { it.role != "system" }
+                for (i in 0 until nonSystemMessages.size - 1) {
+                    val msg = nonSystemMessages[i]
                     if (msg.role == "user") {
                         apiConversation.sendMessageAsync(msg.content).collect { }
                     }
                 }
                 // 마지막 user 메시지로 실제 응답 생성
-                val lastMsg = userMessages.lastOrNull { it.role == "user" }?.content ?: ""
+                val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
                 apiConversation.sendMessageAsync(lastMsg).collect { token ->
                     responseText.append(token)
                 }
-
-            finally {
+            } finally {
+                // API conversation 닫고 앱 conversation 복원
                 try { apiConversation.close() } catch (e: Exception) { }
                 delay(300)
                 try {
@@ -229,11 +229,13 @@ class OpenAiApiServer(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Inference failed", e)
-            call.respond(HttpStatusCode.InternalServerError,
-                ErrorResponse(ErrorDetail("Inference failed: ${e.message}")))
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                ErrorResponse(ErrorDetail("Inference failed: ${e.message}"))
+            )
             return
         }
-    
+
         val response = ChatCompletionResponse(
             id = "chatcmpl-${System.currentTimeMillis()}",
             created = System.currentTimeMillis() / 1000,
@@ -256,5 +258,4 @@ class OpenAiApiServer(
         )
         call.respond(response)
     }
-
 }
