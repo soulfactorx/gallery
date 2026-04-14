@@ -241,7 +241,8 @@ class OpenAiApiServer(
                     }
                     // 스트리밍 토큰 전송
                     conversation.sendMessageAsync(lastMsg).collect { token ->
-                        val escapedToken = "\"" + token
+                        val tokenStr = token.toString()
+                        val escapedToken = "\"" + tokenStr
                             .replace("\\", "\\\\")
                             .replace("\"", "\\\"")
                             .replace("\n", "\\n")
