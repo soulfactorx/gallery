@@ -157,40 +157,6 @@ class OpenAiApiServer(
         call.respond(ModelListResponse(data = models))
     }
 
-    // 앱 conversation 닫고 새 API용 conversation 생성
-    private suspend fun prepareConversation(
-        engine: Engine,
-        systemMsg: String?,
-    ): com.google.ai.edge.litertlm.Conversation {
-        val appConversation = EngineManager.sharedConversation
-        if (appConversation != null) {
-            try { appConversation.cancelProcess() } catch (e: Exception) { }
-            delay(300)
-            try { appConversation.close() } catch (e: Exception) { }
-            delay(300)
-            EngineManager.sharedConversation = null
-        }
-        return engine.createConversation(
-            ConversationConfig(
-                systemInstruction = systemMsg?.let { Contents.of(it) },
-                samplerConfig = null,
-            )
-        )
-    }
-
-    // API 사용 후 앱용 conversation 복원
-    private suspend fun restoreConversation(engine: Engine) {
-        delay(300)
-        try {
-            val newConversation = engine.createConversation(
-                ConversationConfig(samplerConfig = null)
-            )
-            EngineManager.sharedConversation = newConversation
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to restore app conversation", e)
-        }
-    }
-
     // POST /v1/chat/completions
     private suspend fun handleChatCompletions(call: ApplicationCall) {
         val req = try {
@@ -270,20 +236,18 @@ class OpenAiApiServer(
             // ── 일반 응답 ──────────────────────────────────────────
             val responseText = StringBuilder()
             try {
-                val conversation = prepareConversation(engine, systemMsg)
-                try {
-                    for (i in 0 until nonSystemMessages.size - 1) {
-                        val msg = nonSystemMessages[i]
-                        if (msg.role == "user") {
-                            conversation.sendMessageAsync(msg.content).collect { }
-                        }
-                    }
-                    conversation.sendMessageAsync(lastMsg).collect { token ->
-                        responseText.append(token)
-                    }
-                } finally {
-                    try { conversation.close() } catch (e: Exception) { }
-                    restoreConversation(engine)
+                val conversation = EngineManager.getConversation() ?: run {
+                    call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse(ErrorDetail("No conversation available."))
+                    )
+                    return
+                }
+            
+                // 마지막 user 메시지만 전송
+                val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
+                conversation.sendMessageAsync(lastMsg).collect { token ->
+                    responseText.append(token)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Inference failed", e)
@@ -293,7 +257,7 @@ class OpenAiApiServer(
                 )
                 return
             }
-
+            
             call.respond(
                 ChatCompletionResponse(
                     id = chatId,
