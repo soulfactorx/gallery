@@ -19,7 +19,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
 
 private const val TAG = "OpenAiApiServer"
 
@@ -242,7 +241,12 @@ class OpenAiApiServer(
                     }
                     // 스트리밍 토큰 전송
                     conversation.sendMessageAsync(lastMsg).collect { token ->
-                        val escapedToken = json.encodeToString(JsonPrimitive.serializer(), JsonPrimitive(token))
+                        val escapedToken = "\"" + token
+                            .replace("\\", "\\\\")
+                            .replace("\"", "\\\"")
+                            .replace("\n", "\\n")
+                            .replace("\r", "\\r")
+                            .replace("\t", "\\t") + "\""
                         val chunk = """{"id":"$chatId","object":"chat.completion.chunk","created":${System.currentTimeMillis() / 1000},"model":"$modelId","choices":[{"index":0,"delta":{"role":"assistant","content":$escapedToken},"finish_reason":null}]}"""
                         write("data: $chunk\n\n")
                         flush()
