@@ -1,6 +1,8 @@
 package com.google.ai.edge.gallery.api
 
 import android.util.Log
+import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -13,6 +15,7 @@ import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -96,6 +99,7 @@ object EngineManager {
     fun currentModelId(): String = sharedModelId
 
     fun close() {
+        try { sharedConversation?.close() } catch (e: Exception) { }
         sharedEngine = null
         sharedConversation = null
         sharedModelId = "no-model-loaded"
@@ -163,7 +167,7 @@ class OpenAiApiServer(
             return
         }
 
-        val conversation = EngineManager.getConversation() ?: run {
+        val engine = EngineManager.getEngine() ?: run {
             call.respond(
                 HttpStatusCode.ServiceUnavailable,
                 ErrorResponse(ErrorDetail("No model loaded. Please open chat in the app first."))
@@ -171,13 +175,51 @@ class OpenAiApiServer(
             return
         }
 
+        val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
         val nonSystemMessages = req.messages.filter { it.role != "system" }
         val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
         val chatId = "chatcmpl-${System.currentTimeMillis()}"
         val modelId = EngineManager.currentModelId()
 
+        // 기존 conversation 닫기
+        val oldConversation = EngineManager.sharedConversation
+        if (oldConversation != null) {
+            try { oldConversation.cancelProcess() } catch (e: Exception) { }
+            delay(200)
+            try { oldConversation.close() } catch (e: Exception) { }
+            delay(200)
+            EngineManager.sharedConversation = null
+        }
+
+        // system 프롬프트 적용해서 새 conversation 생성
+        val conversation = try {
+            val conv = engine.createConversation(
+                ConversationConfig(
+                    systemInstruction = systemMsg?.let { Contents.of(it) },
+                    samplerConfig = null,
+                )
+            )
+            EngineManager.sharedConversation = conv
+            conv
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create conversation", e)
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                ErrorResponse(ErrorDetail("Failed to create conversation: ${e.message}"))
+            )
+            return
+        }
+
+        // 대화 히스토리 재현 (마지막 user 메시지 제외)
         val responseText = StringBuilder()
         try {
+            for (i in 0 until nonSystemMessages.size - 1) {
+                val msg = nonSystemMessages[i]
+                if (msg.role == "user") {
+                    conversation.sendMessageAsync(msg.content).collect { }
+                }
+            }
+            // 마지막 user 메시지로 실제 응답 생성
             conversation.sendMessageAsync(lastMsg).collect { token: Any ->
                 responseText.append(token.toString())
             }
