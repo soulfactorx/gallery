@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 
 private const val TAG = "OpenAiApiServer"
 
@@ -157,6 +158,40 @@ class OpenAiApiServer(
         call.respond(ModelListResponse(data = models))
     }
 
+    // 앱 conversation 닫고 새 API용 conversation 생성
+    private suspend fun prepareConversation(
+        engine: Engine,
+        systemMsg: String?,
+    ): com.google.ai.edge.litertlm.Conversation {
+        val appConversation = EngineManager.sharedConversation
+        if (appConversation != null) {
+            try { appConversation.cancelProcess() } catch (e: Exception) { }
+            delay(300)
+            try { appConversation.close() } catch (e: Exception) { }
+            delay(300)
+            EngineManager.sharedConversation = null
+        }
+        return engine.createConversation(
+            ConversationConfig(
+                systemInstruction = systemMsg?.let { Contents.of(it) },
+                samplerConfig = null,
+            )
+        )
+    }
+
+    // API 사용 후 앱용 conversation 복원
+    private suspend fun restoreConversation(engine: Engine) {
+        delay(300)
+        try {
+            val newConversation = engine.createConversation(
+                ConversationConfig(samplerConfig = null)
+            )
+            EngineManager.sharedConversation = newConversation
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore app conversation", e)
+        }
+    }
+
     // POST /v1/chat/completions
     private suspend fun handleChatCompletions(call: ApplicationCall) {
         val req = try {
@@ -177,85 +212,105 @@ class OpenAiApiServer(
             return
         }
 
-        val responseText = StringBuilder()
-        try {
-            // 앱의 conversation 닫기
-            val appConversation = EngineManager.sharedConversation
-            if (appConversation != null) {
-                try { appConversation.cancelProcess() } catch (e: Exception) { }
-                delay(300)
-                try { appConversation.close() } catch (e: Exception) { }
-                delay(300)
-                EngineManager.sharedConversation = null
-            }
+        val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
+        val nonSystemMessages = req.messages.filter { it.role != "system" }
+        val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
+        val chatId = "chatcmpl-${System.currentTimeMillis()}"
+        val modelId = EngineManager.currentModelId()
+        val json = Json { encodeDefaults = true }
 
-            // system 프롬프트 추출
-            val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
-
-            // RisuAI 설정으로 새 conversation 생성
-            val apiConversation = engine.createConversation(
-                ConversationConfig(
-                    systemInstruction = systemMsg?.let { Contents.of(it) },
-                    samplerConfig = null,
-                )
-            )
-
-            try {
-                // 대화 히스토리 재현 (마지막 메시지 제외)
-                val nonSystemMessages = req.messages.filter { it.role != "system" }
-                for (i in 0 until nonSystemMessages.size - 1) {
-                    val msg = nonSystemMessages[i]
-                    if (msg.role == "user") {
-                        apiConversation.sendMessageAsync(msg.content).collect { }
-                    }
-                }
-                // 마지막 user 메시지로 실제 응답 생성
-                val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
-                apiConversation.sendMessageAsync(lastMsg).collect { token ->
-                    responseText.append(token)
-                }
-            } finally {
-                // API conversation 닫고 앱 conversation 복원
-                try { apiConversation.close() } catch (e: Exception) { }
-                delay(300)
-                try {
-                    val newAppConversation = engine.createConversation(
-                        ConversationConfig(samplerConfig = null)
-                    )
-                    EngineManager.sharedConversation = newAppConversation
+        if (req.stream) {
+            // ── 스트리밍 응답 ──────────────────────────────────────
+            call.response.header(HttpHeaders.CacheControl, "no-cache")
+            call.response.header(HttpHeaders.Connection, "keep-alive")
+            call.respondTextWriter(contentType = ContentType.Text.EventStream) {
+                val conversation = try {
+                    prepareConversation(engine, systemMsg)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to restore app conversation", e)
+                    Log.e(TAG, "Failed to prepare conversation", e)
+                    write("data: [DONE]\n\n")
+                    flush()
+                    return@respondTextWriter
+                }
+                try {
+                    // 히스토리 재현 (마지막 제외)
+                    for (i in 0 until nonSystemMessages.size - 1) {
+                        val msg = nonSystemMessages[i]
+                        if (msg.role == "user") {
+                            conversation.sendMessageAsync(msg.content).collect { }
+                        }
+                    }
+                    // 스트리밍 토큰 전송
+                    conversation.sendMessageAsync(lastMsg).collect { token ->
+                        val escapedToken = json.encodeToString(JsonPrimitive.serializer(), JsonPrimitive(token))
+                        val chunk = """{"id":"$chatId","object":"chat.completion.chunk","created":${System.currentTimeMillis() / 1000},"model":"$modelId","choices":[{"index":0,"delta":{"role":"assistant","content":$escapedToken},"finish_reason":null}]}"""
+                        write("data: $chunk\n\n")
+                        flush()
+                    }
+                    // 종료 chunk
+                    val doneChunk = """{"id":"$chatId","object":"chat.completion.chunk","created":${System.currentTimeMillis() / 1000},"model":"$modelId","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"""
+                    write("data: $doneChunk\n\n")
+                    write("data: [DONE]\n\n")
+                    flush()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Streaming inference failed", e)
+                    write("data: [DONE]\n\n")
+                    flush()
+                } finally {
+                    try { conversation.close() } catch (e: Exception) { }
+                    restoreConversation(engine)
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Inference failed", e)
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                ErrorResponse(ErrorDetail("Inference failed: ${e.message}"))
-            )
-            return
-        }
-
-        val response = ChatCompletionResponse(
-            id = "chatcmpl-${System.currentTimeMillis()}",
-            created = System.currentTimeMillis() / 1000,
-            model = EngineManager.currentModelId(),
-            choices = listOf(
-                Choice(
-                    index = 0,
-                    message = ChatMessage(
-                        role = "assistant",
-                        content = responseText.toString(),
-                    ),
-                    finish_reason = "stop",
+        } else {
+            // ── 일반 응답 ──────────────────────────────────────────
+            val responseText = StringBuilder()
+            try {
+                val conversation = prepareConversation(engine, systemMsg)
+                try {
+                    for (i in 0 until nonSystemMessages.size - 1) {
+                        val msg = nonSystemMessages[i]
+                        if (msg.role == "user") {
+                            conversation.sendMessageAsync(msg.content).collect { }
+                        }
+                    }
+                    conversation.sendMessageAsync(lastMsg).collect { token ->
+                        responseText.append(token)
+                    }
+                } finally {
+                    try { conversation.close() } catch (e: Exception) { }
+                    restoreConversation(engine)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Inference failed", e)
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ErrorResponse(ErrorDetail("Inference failed: ${e.message}"))
                 )
-            ),
-            usage = Usage(
-                prompt_tokens = req.messages.sumOf { it.content.length / 4 },
-                completion_tokens = responseText.length / 4,
-                total_tokens = (req.messages.sumOf { it.content.length } + responseText.length) / 4,
-            ),
-        )
-        call.respond(response)
+                return
+            }
+
+            call.respond(
+                ChatCompletionResponse(
+                    id = chatId,
+                    created = System.currentTimeMillis() / 1000,
+                    model = modelId,
+                    choices = listOf(
+                        Choice(
+                            index = 0,
+                            message = ChatMessage(
+                                role = "assistant",
+                                content = responseText.toString(),
+                            ),
+                            finish_reason = "stop",
+                        )
+                    ),
+                    usage = Usage(
+                        prompt_tokens = req.messages.sumOf { it.content.length / 4 },
+                        completion_tokens = responseText.length / 4,
+                        total_tokens = (req.messages.sumOf { it.content.length } + responseText.length) / 4,
+                    ),
+                )
+            )
+        }
     }
 }
