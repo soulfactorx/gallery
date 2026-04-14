@@ -1,8 +1,6 @@
 package com.google.ai.edge.gallery.api
 
 import android.util.Log
-import com.google.ai.edge.litertlm.ConversationConfig
-import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -15,7 +13,6 @@ import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -151,10 +148,7 @@ class OpenAiApiServer(
 
     // GET /v1/models
     private suspend fun handleModels(call: ApplicationCall) {
-        val models = listOf(
-            ModelInfo(id = EngineManager.currentModelId()),
-        )
-        call.respond(ModelListResponse(data = models))
+        call.respond(ModelListResponse(data = listOf(ModelInfo(id = EngineManager.currentModelId()))))
     }
 
     // POST /v1/chat/completions
@@ -169,117 +163,54 @@ class OpenAiApiServer(
             return
         }
 
-        val engine = EngineManager.getEngine() ?: run {
+        val conversation = EngineManager.getConversation() ?: run {
             call.respond(
                 HttpStatusCode.ServiceUnavailable,
-                ErrorResponse(ErrorDetail("No model loaded. Please load a model in the app first."))
+                ErrorResponse(ErrorDetail("No model loaded. Please open chat in the app first."))
             )
             return
         }
 
-        val systemMsg = req.messages.firstOrNull { it.role == "system" }?.content
         val nonSystemMessages = req.messages.filter { it.role != "system" }
         val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
         val chatId = "chatcmpl-${System.currentTimeMillis()}"
         val modelId = EngineManager.currentModelId()
-        val json = Json { encodeDefaults = true }
 
-        if (req.stream) {
-            // ── 스트리밍 응답 ──────────────────────────────────────
-            call.response.header(HttpHeaders.CacheControl, "no-cache")
-            call.response.header(HttpHeaders.Connection, "keep-alive")
-            call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-                val conversation = try {
-                    prepareConversation(engine, systemMsg)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to prepare conversation", e)
-                    write("data: [DONE]\n\n")
-                    flush()
-                    return@respondTextWriter
-                }
-                try {
-                    // 히스토리 재현 (마지막 제외)
-                    for (i in 0 until nonSystemMessages.size - 1) {
-                        val msg = nonSystemMessages[i]
-                        if (msg.role == "user") {
-                            conversation.sendMessageAsync(msg.content).collect { }
-                        }
-                    }
-                    // 스트리밍 토큰 전송
-                    conversation.sendMessageAsync(lastMsg).collect { token ->
-                        val tokenStr = token.toString()
-                        val escapedToken = "\"" + tokenStr
-                            .replace("\\", "\\\\")
-                            .replace("\"", "\\\"")
-                            .replace("\n", "\\n")
-                            .replace("\r", "\\r")
-                            .replace("\t", "\\t") + "\""
-                        val chunk = """{"id":"$chatId","object":"chat.completion.chunk","created":${System.currentTimeMillis() / 1000},"model":"$modelId","choices":[{"index":0,"delta":{"role":"assistant","content":$escapedToken},"finish_reason":null}]}"""
-                        write("data: $chunk\n\n")
-                        flush()
-                    }
-                    // 종료 chunk
-                    val doneChunk = """{"id":"$chatId","object":"chat.completion.chunk","created":${System.currentTimeMillis() / 1000},"model":"$modelId","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"""
-                    write("data: $doneChunk\n\n")
-                    write("data: [DONE]\n\n")
-                    flush()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Streaming inference failed", e)
-                    write("data: [DONE]\n\n")
-                    flush()
-                } finally {
-                    try { conversation.close() } catch (e: Exception) { }
-                    restoreConversation(engine)
-                }
+        val responseText = StringBuilder()
+        try {
+            conversation.sendMessageAsync(lastMsg).collect { token: Any ->
+                responseText.append(token.toString())
             }
-        } else {
-            // ── 일반 응답 ──────────────────────────────────────────
-            val responseText = StringBuilder()
-            try {
-                val conversation = EngineManager.getConversation() ?: run {
-                    call.respond(
-                        HttpStatusCode.ServiceUnavailable,
-                        ErrorResponse(ErrorDetail("No conversation available."))
-                    )
-                    return
-                }
-            
-                // 마지막 user 메시지만 전송
-                val lastMsg = nonSystemMessages.lastOrNull { it.role == "user" }?.content ?: ""
-                conversation.sendMessageAsync(lastMsg).collect { token ->
-                    responseText.append(token)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Inference failed", e)
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    ErrorResponse(ErrorDetail("Inference failed: ${e.message}"))
-                )
-                return
-            }
-            
+        } catch (e: Exception) {
+            Log.e(TAG, "Inference failed", e)
             call.respond(
-                ChatCompletionResponse(
-                    id = chatId,
-                    created = System.currentTimeMillis() / 1000,
-                    model = modelId,
-                    choices = listOf(
-                        Choice(
-                            index = 0,
-                            message = ChatMessage(
-                                role = "assistant",
-                                content = responseText.toString(),
-                            ),
-                            finish_reason = "stop",
-                        )
-                    ),
-                    usage = Usage(
-                        prompt_tokens = req.messages.sumOf { it.content.length / 4 },
-                        completion_tokens = responseText.length / 4,
-                        total_tokens = (req.messages.sumOf { it.content.length } + responseText.length) / 4,
-                    ),
-                )
+                HttpStatusCode.InternalServerError,
+                ErrorResponse(ErrorDetail("Inference failed: ${e.message}"))
             )
+            return
         }
+
+        call.respond(
+            ChatCompletionResponse(
+                id = chatId,
+                created = System.currentTimeMillis() / 1000,
+                model = modelId,
+                choices = listOf(
+                    Choice(
+                        index = 0,
+                        message = ChatMessage(
+                            role = "assistant",
+                            content = responseText.toString(),
+                        ),
+                        finish_reason = "stop",
+                    )
+                ),
+                usage = Usage(
+                    prompt_tokens = req.messages.sumOf { it.content.length / 4 },
+                    completion_tokens = responseText.length / 4,
+                    total_tokens = (req.messages.sumOf { it.content.length } + responseText.length) / 4,
+                ),
+            )
+        )
     }
 }
